@@ -56,9 +56,15 @@ final class SpeechModelStore: ObservableObject {
             .appendingPathComponent(folderName, isDirectory: true)
     }
 
+    nonisolated private static var hasManagedAssetPacks: Bool {
+        (Bundle.main.object(forInfoDictionaryKey: "BAHasManagedAssetPacks") as? Bool) == true
+            && (Bundle.main.object(forInfoDictionaryKey: "BAAppGroupID") as? String)?.isEmpty == false
+    }
+
     /// The model folder inside the asset pack, when the pack is on the device.
     nonisolated private static var packDirectory: URL? {
-        guard let file = try? AssetPackManager.shared.url(for: FilePath("\(folderName)/config.json")) else { return nil }
+        guard hasManagedAssetPacks,
+              let file = try? AssetPackManager.shared.url(for: FilePath("\(folderName)/config.json")) else { return nil }
         let folder = file.deletingLastPathComponent()
         return AsrModels.modelsExist(at: folder, version: version) ? folder : nil
     }
@@ -122,6 +128,7 @@ final class SpeechModelStore: ObservableObject {
     }
 
     nonisolated private static func downloadPack(progress: @escaping @Sendable (Double) -> Void) async throws {
+        guard hasManagedAssetPacks else { throw CancellationError() }
         let manager = AssetPackManager.shared
         let pack = try await manager.assetPack(withID: assetPackID)
         let updates = Task {
