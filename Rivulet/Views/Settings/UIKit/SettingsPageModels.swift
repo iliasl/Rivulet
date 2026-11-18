@@ -441,7 +441,8 @@ enum SettingsContent {
             SettingsRowItem(id: "cache",          title: "Cache & Storage", kind: .navigation(.cache)),
             SettingsRowItem(id: "iCloudSync",     title: "iCloud Sync",
                             kind: .cycle(value: { iCloudSyncValue },
-                                         next: { CloudSync.shared.setEnabled(!CloudSync.shared.isEnabled) })),
+                                         next: { CloudSync.shared.setEnabled(!CloudSync.shared.isEnabled) }),
+                            isEnabled: { CloudSync.isSupported }),
             SettingsRowItem(id: "cat_about",      title: "About",      kind: .navigation(.about))
         ]
     }

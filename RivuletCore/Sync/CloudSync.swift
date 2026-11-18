@@ -42,16 +42,29 @@ final class CloudSync: ObservableObject {
     private lazy var vault = AccountVault()
     private lazy var coordinator = AccountSyncCoordinator(vault: vault, kinds: Self.accountKinds)
 
+    /// CloudKit (`iCloud.com.gstudios.rivulet.sync`) is only provisioned for the official bundle id.
+    static let isSupported = Bundle.main.bundleIdentifier == "com.gstudios.rivulet"
+
     /// Off until this device turns it on.
-    var isEnabled: Bool { defaults.bool(forKey: SyncCatalog.enabledKey) }
+    var isEnabled: Bool { Self.isSupported && defaults.bool(forKey: SyncCatalog.enabledKey) }
 
     func setEnabled(_ enabled: Bool) {
+        guard Self.isSupported else {
+            defaults.set(false, forKey: SyncCatalog.enabledKey)
+            deactivate()
+            return
+        }
         defaults.set(enabled, forKey: SyncCatalog.enabledKey)
         enabled ? activate() : deactivate()
     }
 
     /// Call once at launch, after the host has set its hooks.
     func start() {
+        guard Self.isSupported else {
+            defaults.set(false, forKey: SyncCatalog.enabledKey)
+            deactivate()
+            return
+        }
         guard !started else { return }
         started = true
         let center = NotificationCenter.default
