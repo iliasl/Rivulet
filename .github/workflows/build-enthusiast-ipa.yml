@@ -1,0 +1,128 @@
+name: Build Enthusiast tvOS IPA (Height Audio + FEL)
+
+on:
+  workflow_dispatch:
+    inputs:
+      bundle_id:
+        description: 'Bundle Identifier for sideloading'
+        required: false
+        default: 'com.iliasl.rivulet'
+        type: string
+      enable_fel:
+        description: 'Also enable full Dolby Vision Profile 7 FEL (--fel)'
+        required: false
+        default: true
+        type: boolean
+      publish_release:
+        description: 'Publish unsigned Rivulet.ipa to GitHub Releases (for atvloadly)'
+        required: false
+        default: true
+        type: boolean
+  push:
+    branches:
+      - enthusiast
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-enthusiast-tvos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-ipa:
+    runs-on: xcode-27
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Select Codemagic's Xcode
+        run: |
+          VERSION="$(awk '/^ *xcode:/ {print $2; exit}' codemagic.yaml)"
+          if [ -d "/Applications/Xcode_$VERSION.app" ]; then
+            sudo xcode-select -s "/Applications/Xcode_$VERSION.app/Contents/Developer"
+          else
+            LATEST_XCODE="$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
+            sudo xcode-select -s "$LATEST_XCODE/Contents/Developer"
+          fi
+          xcodebuild -version
+
+      - name: Enable Height Audio & Prepare Self-Build
+        run: |
+          BUNDLE_ID="${{ inputs.bundle_id || 'com.iliasl.rivulet' }}"
+          FEL_FLAG=""
+          if [ "${{ inputs.enable_fel }}" = "false" ]; then
+            FEL_FLAG="--no-fel"
+          fi
+          python3 Scripts/prepare-self-build.py --bundle-id "$BUNDLE_ID" $FEL_FLAG
+
+      - name: Cache Swift packages
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: SourcePackages
+          key: spm-enthusiast-${{ runner.os }}-${{ hashFiles('Rivulet.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          restore-keys: |
+            spm-enthusiast-${{ runner.os }}-
+            spm-${{ runner.os }}-
+
+      - name: Resolve Swift packages (including LibTrueHD)
+        run: |
+          xcodebuild \
+            -resolvePackageDependencies \
+            -project Rivulet.xcodeproj \
+            -scheme "Rivulet" \
+            -clonedSourcePackagesDirPath SourcePackages
+
+      - name: Build Rivulet tvOS (Release, unsigned)
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project Rivulet.xcodeproj \
+            -scheme "Rivulet" \
+            -configuration Release \
+            -destination 'generic/platform=tvOS' \
+            -derivedDataPath DerivedData \
+            -clonedSourcePackagesDirPath SourcePackages \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            AD_HOC_CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Package Rivulet.ipa
+        run: |
+          APP_PATH="DerivedData/Build/Products/Release-appletvos/Rivulet.app"
+          test -d "$APP_PATH"
+          rm -rf Payload Rivulet.ipa
+          mkdir -p Payload
+          cp -R "$APP_PATH" Payload/Rivulet.app
+          zip -qry Rivulet.ipa Payload
+          ls -lh Rivulet.ipa
+
+      - name: Upload IPA Artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: Rivulet-tvOS-Enthusiast-IPA
+          path: Rivulet.ipa
+          retention-days: 30
+
+      - name: Publish to GitHub Releases (enthusiast-latest)
+        if: ${{ github.event_name == 'push' || inputs.publish_release != false }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="enthusiast-latest"
+          SHORT_SHA="$(git rev-parse --short HEAD)"
+          NOTES="Built from commit ${SHORT_SHA} with --height-audio (5.1.2 - 9.1.6 TrueHD Atmos & DTS:X) and --fel enabled."
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            git tag -f "$TAG" "${{ github.sha }}"
+            git push -f origin "$TAG"
+            gh release upload "$TAG" Rivulet.ipa --clobber
+            gh release edit "$TAG" --notes "$NOTES" --title "Rivulet Enthusiast Build (${SHORT_SHA})"
+          else
+            gh release create "$TAG" Rivulet.ipa \
+              --target "${{ github.sha }}" \
+              --title "Rivulet Enthusiast Build (${SHORT_SHA})" \
+              --notes "$NOTES"
+          fi
